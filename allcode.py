@@ -45,15 +45,15 @@ from transformers import pipeline
 
 import torch
 
-# Подключаем Google Диск
+
 drive.mount('/content/drive')
 
-# Путь к архиву на Google Диске
-ZIP_PATH = "/content/drive/MyDrive/skin.zip"
-EXTRACT_DIR = "skin_data"  # Датасет, но понятный для колаба
-OUT_DIR = "checkpoints" #Очень важная фича
 
-# Распаковка архива
+ZIP_PATH = "/content/drive/MyDrive/skin.zip"
+EXTRACT_DIR = "skin_data" 
+OUT_DIR = "checkpoints" 
+
+
 if not os.path.exists(EXTRACT_DIR):
     with zipfile.ZipFile(ZIP_PATH, 'r') as zip_ref:
         zip_ref.extractall(EXTRACT_DIR)
@@ -61,7 +61,7 @@ if not os.path.exists(EXTRACT_DIR):
 else:
     print(f"Директория {EXTRACT_DIR} уже существует")
 
-DATA_DIR = os.path.join(EXTRACT_DIR, "train")  # путь к папке train с 5 классами
+DATA_DIR = os.path.join(EXTRACT_DIR, "train") 
 os.makedirs("checkpoints", exist_ok=True)
 
 import os
@@ -74,8 +74,7 @@ import timm
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 
-# ====== Конфигурация ======
-DATA_DIR = "skin_data"   # путь к датасету
+DATA_DIR = "skin_data"   
 SAVE_DIR = "trained_models"
 BATCH_SIZE = 16
 EPOCHS = 5
@@ -87,7 +86,6 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 CLASS_NAMES = ["akne", "eksim", "herpes", "panu", "rosacea"]
 NUM_CLASSES = len(CLASS_NAMES)
 
-# ====== Преобразования ======
 train_tfms = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
@@ -105,23 +103,22 @@ val_tfms = transforms.Compose([
                          [0.229, 0.224, 0.225])
 ])
 
-# ====== Датасеты ======
+
 train_ds = datasets.ImageFolder(DATA_DIR, transform=train_tfms)
 val_size = int(0.2 * len(train_ds))
 train_size = len(train_ds) - val_size
 train_ds, val_ds = torch.utils.data.random_split(train_ds, [train_size, val_size])
 
-val_ds.dataset.transform = val_tfms  # валидация без аугментаций
+val_ds.dataset.transform = val_tfms  
 
 train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
-# ====== Модель EfficientNet-B3 ======
 def get_model():
     model = timm.create_model("efficientnet_b3", pretrained=True, num_classes=NUM_CLASSES)
     return model.to(DEVICE)
 
-# ====== Обучение ======
+
 def train_one_model(model, epochs=EPOCHS):
     optimizer = optim.Adam(model.parameters(), lr=LR)
     criterion = nn.CrossEntropyLoss()
@@ -144,7 +141,7 @@ def train_one_model(model, epochs=EPOCHS):
 
         avg_loss = running_loss / len(train_loader)
 
-        # ====== Валидация ======
+  
         model.eval()
         preds, true_labels = [], []
         with torch.no_grad():
@@ -158,11 +155,10 @@ def train_one_model(model, epochs=EPOCHS):
         acc = accuracy_score(true_labels, preds)
         print(f"[EfficientNet-B3] Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}, Val Acc: {acc:.4f}")
 
-        # Логирование истории
+    
         history["train_loss"].append(avg_loss)
         history["val_acc"].append(acc)
 
-        # Сохраняем только лучшую модель
         if acc > best_acc:
             best_acc = acc
             save_path = os.path.join(SAVE_DIR, "efficientnet_b3.pth")
@@ -171,12 +167,9 @@ def train_one_model(model, epochs=EPOCHS):
 
     return history
 
-# ====== Запуск ======
 if __name__ == "__main__":
     model = get_model()
     history = train_one_model(model)
-
-    # ====== График ======
     plt.figure(figsize=(8, 5))
     plt.plot(history["train_loss"], label="Train Loss", marker="o")
     plt.plot(history["val_acc"], label="Validation Accuracy", marker="s")
@@ -189,10 +182,8 @@ if __name__ == "__main__":
 
 model_name = "Qwen/Qwen-7B"
 
-# Загружаем токенайзер
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
-# Загружаем модель (можно в 4-бит для экономии VRAM)
+tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 qwen_pipe = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map="auto",       
@@ -200,13 +191,13 @@ qwen_pipe = AutoModelForCausalLM.from_pretrained(
     load_in_4bit=True         
 )
 
-# ====== Настройки ======
+
 TELEGRAM_TOKEN = "ТОКЕН"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 CLASS_NAMES = ["akne", "eksim", "herpes", "panu", "rosacea"]
 NUM_CLASSES = len(CLASS_NAMES)
 
-# ====== Загрузка классификатора кожи (EfficientNet B3) ======
+
 def get_model(name, weight_path=None):
     model = timm.create_model(name, pretrained=False, num_classes=NUM_CLASSES)
     if weight_path and os.path.exists(weight_path):
@@ -216,7 +207,6 @@ def get_model(name, weight_path=None):
 
 skin_model = get_model("efficientnet_b3", "trained_models/efficientnet_b3.pth")
 
-# ====== Преобразование изображений ======
 transform = T.Compose([
     T.Resize((224, 224)),
     T.ToTensor(),
@@ -224,7 +214,7 @@ transform = T.Compose([
                 [0.229, 0.224, 0.225]),
 ])
 
-# ====== Классификация ======
+
 def predict_image(image_path):
     try:
         img = Image.open(image_path).convert("RGB")
@@ -239,7 +229,6 @@ def predict_image(image_path):
         print("Ошибка классификации:", e)
         return "Ошибка"
 
-# ====== Генерация ответа Qwen ======
 def get_recommendation(disease: str) -> str:
     try:
         prompt = f" {disease}"
@@ -248,7 +237,6 @@ def get_recommendation(disease: str) -> str:
     except Exception as e:
         return f"Ошибка генерации: {e}"
 
-# ====== Телеграм Бот ======
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
@@ -281,7 +269,6 @@ async def handle_message(message: types.Message):
         recs = get_recommendation(diagnosis)
         await message.answer(f"Определено заболевание: {diagnosis}\n\n💊 Рекомендации:\n{recs}")
 
-# ====== Запуск ======
 async def main():
     await dp.start_polling(bot)
 
