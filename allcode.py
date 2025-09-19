@@ -288,12 +288,3 @@ async def main():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.get_event_loop().run_until_complete(main())
-
-!apt-get install -qq git
-from getpass import getpass
-import os
-os.eviron["basic-account-a11y"] = getpass("GitHub username: ")
-os.eviron["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"] =getpass("GitHub token:")
-
-!apt-get install -qq git
-
