@@ -1,0 +1,164 @@
+import subprocess
+import sys
+import os
+import asyncio
+import torch
+import nest_asyncio
+
+# --- 1. УСТАНОВКА БИБЛИОТЕК ---
+def install_packages():
+    try:
+        import aiogram
+    except ImportError:
+        packages = ["aiogram", "ultralytics", "transformers", "accelerate", "nest_asyncio"]
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-U"] + packages)
+
+install_packages()
+
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from ultralytics import YOLO
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+nest_asyncio.apply()
+
+# --- 2. КОНФИГУРАЦИЯ ---
+CONFIG = {
+    "TOKEN": "ТУТ_МОГ_БЫТЬ_ТОКЕН",
+    "CV_MODEL_PATH": "best_skin_model.pt",
+    "LLM_NAME": "Qwen/Qwen2.5-3B-Instruct", 
+    "DISEASE_RU": {
+        'acne': 'акне', 'eksim': 'экзема', 'herpes': 'герпес', 
+        'panu': 'отрубевидный лишай', 'rosacea': 'розацеа'
+    },
+    "SYSTEM_PROMPT": (
+        "Ты — эксперт по косметическому уходу за кожей. Твоя роль: давать рекомендации "
+        "по очищению, увлажнению и SPF. Запрещено ставить диагнозы и назначать лечение. "
+        "Отвечай кратко, пунктами, на русском языке."
+    )
+}
+
+# --- 3. ИИ СИСТЕМА ---
+class SkinCareAI:
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Загрузка CV
+        if os.path.exists(CONFIG["CV_MODEL_PATH"]):
+            self.cv_model = YOLO(CONFIG["CV_MODEL_PATH"])
+            self.cv_available = True
+            print("✅ YOLOv8 успешно загружена.")
+        else:
+            self.cv_model = None
+            self.cv_available = False
+            print("⚠️ Файл модели не найден. Работа в режиме чата.")
+        
+        # Загрузка Qwen 2.5
+        print(f"⏳ Загрузка {CONFIG['LLM_NAME']}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(CONFIG["LLM_NAME"])
+        self.model = AutoModelForCausalLM.from_pretrained(
+            CONFIG["LLM_NAME"],
+            dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True
+        )
+        print("✅ Qwen готова.")
+
+    def generate_advice(self, user_text, is_analysis=False):
+        """Исправленная генерация: гарантирует получение ответа"""
+        prompt_text = f"У пользователя визуально: {user_text}. Дай косметические советы." if is_analysis else user_text
+        
+        messages = [
+            {"role": "system", "content": CONFIG["SYSTEM_PROMPT"]},
+            {"role": "user", "content": prompt_text}
+        ]
+        
+        # Создаем промпт с корректными тегами ассистента
+        formatted_prompt = self.tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
+        
+        inputs = self.tokenizer([formatted_prompt], return_tensors="pt").to(self.device)
+        
+        with torch.no_grad():
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=400,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+        
+        # Извлекаем ТОЛЬКО новый сгенерированный текст
+        in_len = inputs.input_ids.shape[1]
+        response_ids = generated_ids[0][in_len:]
+        return self.tokenizer.decode(response_ids, skip_special_tokens=True).strip()
+
+    def process_image(self, img_path):
+        if not self.cv_available: return None, 0, "Модуль анализа отключен."
+        
+        results = self.cv_model.predict(img_path, conf=0.2, verbose=False)
+        result = results[0] # Исправляем ошибку 'list'
+
+        if result.probs is None:
+            return None, 0, "Не удалось распознать признаки на фото."
+
+        top_idx = result.probs.top1
+        class_name = result.names[top_idx]
+        conf = result.probs.top1conf.item()
+        disease_ru = CONFIG["DISEASE_RU"].get(class_name, "особенности кожи")
+        
+        advice = self.generate_advice(disease_ru, is_analysis=True)
+        return disease_ru, conf, advice
+
+# --- 4. ТЕЛЕГРАМ БОТ ---
+ai_system = SkinCareAI()
+bot = Bot(token=CONFIG["TOKEN"])
+dp = Dispatcher()
+
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    mode = "📸 Пришли фото или напиши вопрос текстом." if ai_system.cv_available else "📝 Задай вопрос об уходе за кожей текстом."
+    await message.answer(f"Привет! Я ИИ-консультант 2025.\n\n{mode}")
+
+@dp.message(F.photo)
+async def handle_photo(message: types.Message):
+    if not ai_system.cv_available:
+        return await message.reply("Модуль фото не загружен. Задайте вопрос текстом.")
+
+    status = await message.answer("⌛ Анализирую фото и готовлю советы...")
+    path = f"img_{message.from_user.id}.jpg"
+    await bot.download_file((await bot.get_file(message.photo[-1].file_id)).file_path, path)
+
+    try:
+        res, conf, adv = await asyncio.to_thread(ai_system.process_image, path)
+        if res:
+            text = f"<b>Визуально:</b> {res}\n<b>Уверенность:</b> {conf:.1%}\n\n<b>Рекомендации:</b>\n{adv}"
+            await message.reply(text, parse_mode="HTML")
+        else:
+            await message.reply(adv)
+    except Exception as e:
+        await message.reply(f"Ошибка: {e}")
+    finally:
+        await status.delete()
+        if os.path.exists(path): os.remove(path)
+
+@dp.message(F.text)
+async def handle_text(message: types.Message):
+    status = await message.answer("🤔 Думаю над ответом...")
+    try:
+        reply = await asyncio.to_thread(ai_system.generate_advice, message.text)
+        await message.reply(reply if reply else "Не удалось сформулировать ответ. Попробуйте еще раз.")
+    finally:
+        await status.delete()
+
+async def main():
+    print("🚀 Бот запущен! Можно писать в Telegram.")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
