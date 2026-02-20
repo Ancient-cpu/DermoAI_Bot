@@ -1,4 +1,3 @@
-Проект DermotologAI
  <img width="1024" height="701" alt="image" src="https://github.com/user-attachments/assets/b3834bc7-32db-46c8-9d18-ffd96434a098" />
 
 Проект: "Система классификации кожных заболеваний на основе сверточных нейронных сетей"
